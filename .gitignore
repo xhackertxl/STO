@@ -1,0 +1,14 @@
+bin/
+target/
+
+.settings/
+
+.classpath
+.project
+
+
+# === IntelliJ ===
+*.iml
+*.ipr
+*.iws
+.idea/
