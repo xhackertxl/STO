@@ -10,9 +10,21 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+//real time zijinliu
 public class RealTimeZiJinLiuFatchDataHelper {
-
 	private static final String baseUrl = "http://data.eastmoney.com/zjlx/";
+	private static RealTimeZiJinLiuFatchDataHelper instance = null;
+
+	private RealTimeZiJinLiuFatchDataHelper() {
+
+	}
+
+	public static RealTimeZiJinLiuFatchDataHelper getInstance() {
+		if (instance == null) {
+			instance = new RealTimeZiJinLiuFatchDataHelper();
+		}
+		return instance;
+	}
 
 	public ZiJinLiuVO fetchDataFromWeb(String stockId) {
 		ZiJinLiuVO vo = new ZiJinLiuVO(stockId);
@@ -61,8 +73,8 @@ public class RealTimeZiJinLiuFatchDataHelper {
 				vo.smallNetPer = Double.parseDouble(xdjzb.text().substring(0, xdjzb.text().length() - 1));
 			}
 
-			// System.out.println(vo.toNetInString());
-			// System.out.println(vo.toNetPerString());
+			System.out.println(vo.toNetInString());
+			System.out.println(vo.toNetPerString());
 
 		} catch (Exception e) {
 			e.printStackTrace();

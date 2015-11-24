@@ -9,6 +9,7 @@ import java.util.List;
 import org.easystogu.checkpoint.DailyCombineCheckPoint;
 import org.easystogu.config.FileConfigurationService;
 import org.easystogu.db.access.CheckPointDailySelectionTableHelper;
+import org.easystogu.db.access.EstimateStockTableHelper;
 import org.easystogu.db.access.IndBollTableHelper;
 import org.easystogu.db.access.IndKDJTableHelper;
 import org.easystogu.db.access.IndMacdTableHelper;
@@ -26,24 +27,13 @@ import org.easystogu.db.access.IndZhuliJinChuTableHelper;
 import org.easystogu.db.access.StockPriceTableHelper;
 import org.easystogu.db.access.WeekStockPriceTableHelper;
 import org.easystogu.db.table.CheckPointDailySelectionVO;
+import org.easystogu.db.table.EstimateStockVO;
 import org.easystogu.db.table.StockPriceVO;
 import org.easystogu.file.access.CompanyInfoFileHelper;
-import org.easystogu.indicator.runner.DailyBollCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyKDJCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyMacdCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyMai1Mai2CountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyShenXianCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyWeekBollCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyWeekKDJCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyWeekMacdCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyWeekMai1Mai2CountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyWeekShenXianCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyWeekYiMengBSCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyXueShi2CountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyYiMengBSCountAndSaveDBRunner;
-import org.easystogu.indicator.runner.DailyZhuliJinChuCountAndSaveDBRunner;
+import org.easystogu.indicator.runner.AllDailyIndCountAndSaveDBRunner;
 import org.easystogu.report.ReportTemplate;
 import org.easystogu.sina.runner.DailyWeeklyStockPriceCountAndSaveDBRunner;
+import org.easystogu.utils.FileHelper;
 import org.easystogu.utils.WeekdayUtil;
 
 //based on latest close price, pre-estimate next working day's price
@@ -51,26 +41,27 @@ public class PreEstimateStockPriceRunner implements Runnable {
 	private FileConfigurationService config = FileConfigurationService.getInstance();
 	private CompanyInfoFileHelper stockConfig = CompanyInfoFileHelper.getInstance();
 	private StockPriceTableHelper stockPriceTable = StockPriceTableHelper.getInstance();
+	private EstimateStockTableHelper estimateStockTable = EstimateStockTableHelper.getInstance();
 	private String currentDate = stockPriceTable.getLatestStockDate();
 	private String nextDate = WeekdayUtil.nextWorkingDate(currentDate);
 	private double nextDatePriceIncPercent = config.getDouble("nextDatePriceIncPercent", 1.04);
-	private List<String> stockIds = stockConfig.getAllStockId();
+	private List<String> allStockIds = stockConfig.getAllStockId();
 	private CheckPointDailySelectionTableHelper dailyCheckPointTable = CheckPointDailySelectionTableHelper
 			.getInstance();
 	private double minEarnPercent = config.getDouble("minEarnPercent_Select_CheckPoint");
 
 	private void injectMockStockPriceDate() {
 		System.out.println("Inject Mock StockPrice for nextDate=" + nextDate + ", curDate=" + currentDate);
-		for (String stockId : stockIds) {
+		for (String stockId : allStockIds) {
 			StockPriceVO vo = stockPriceTable.getStockPriceByIdAndDate(stockId, currentDate);
 			if (vo != null) {
 				StockPriceVO vo2 = new StockPriceVO();
 				vo2.stockId = vo.stockId;
 				vo2.date = nextDate;
-				vo2.open = vo.close * nextDatePriceIncPercent;
-				vo2.low = vo2.open;
-				vo2.close = vo2.open;
-				vo2.high = vo2.open;
+				vo2.open = vo.close;
+				vo2.low = vo.close;
+				vo2.close = vo.close * nextDatePriceIncPercent;
+				vo2.high = vo2.close;
 				vo2.volume = vo.volume + 100;
 				vo2.lastClose = vo.close;
 
@@ -106,6 +97,17 @@ public class PreEstimateStockPriceRunner implements Runnable {
 		dailyCheckPointTable.deleteByDate(nextDate);
 	}
 
+	private void saveEstimateStockToDB() {
+		System.out.println("Save Estimate Stock To DB:");
+		List<CheckPointDailySelectionVO> nextDateCPList = dailyCheckPointTable.getDailyCheckPointByDate(nextDate);
+		for (CheckPointDailySelectionVO nextDateCP : nextDateCPList) {
+			if (DailyCombineCheckPoint.getCheckPointByName(nextDateCP.checkPoint).getEarnPercent() >= this.minEarnPercent) {
+				EstimateStockVO vo = new EstimateStockVO(nextDateCP.stockId, nextDateCP.date);
+				estimateStockTable.insertIfNotExist(vo);
+			}
+		}
+	}
+
 	// if both date has checkpoint, this must be a NIU gu 牛股!
 	private void checkDailyCheckPointForBothDate() {
 		System.out.println("CheckPoint for Both Date Report:");
@@ -132,7 +134,7 @@ public class PreEstimateStockPriceRunner implements Runnable {
 	}
 
 	public void reportToHtml(String currDate, String nextDate, Collection<String> bothHitIds) {
-		String file = config.getString("report.estimate.html.file").replaceAll("nextDate", nextDate);
+		String file = config.getString("report.estimate.both.html.file").replaceAll("currentDate", currDate);
 		System.out.println("\nSaving estimate to " + file);
 		try {
 			BufferedWriter fout = new BufferedWriter(new FileWriter(file));
@@ -176,41 +178,44 @@ public class PreEstimateStockPriceRunner implements Runnable {
 
 			fout.flush();
 			fout.close();
+
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
 	}
 
+	// rename report
+	private void renameToEstimateReport() {
+		String srcFile = config.getString("report.analyse.html.file").replaceAll("currentDate", nextDate);
+		String destFile = config.getString("report.estimate.html.file").replaceAll("nextDate", nextDate);
+		FileHelper.RenameFile(srcFile, destFile);
+	}
+
 	public void run() {
 		String[] args = null;
 		try {
-			// day
-			injectMockStockPriceDate();
+			// mock next date stockprice, it must be call after current date's
+			// stockprice is inject into DB
+			this.injectMockStockPriceDate();
 
 			// day ind
-			DailyMacdCountAndSaveDBRunner.main(args);
-			DailyKDJCountAndSaveDBRunner.main(args);
-			DailyBollCountAndSaveDBRunner.main(args);
-			DailyMai1Mai2CountAndSaveDBRunner.main(args);
-			DailyShenXianCountAndSaveDBRunner.main(args);
-			DailyXueShi2CountAndSaveDBRunner.main(args);
-			DailyZhuliJinChuCountAndSaveDBRunner.main(args);
-			DailyYiMengBSCountAndSaveDBRunner.main(args);
+			new AllDailyIndCountAndSaveDBRunner().runDailyIndForStockIds(allStockIds);
 			// week
 			DailyWeeklyStockPriceCountAndSaveDBRunner.main(args);
 			// week ind
-			DailyWeekMacdCountAndSaveDBRunner.main(args);
-			DailyWeekKDJCountAndSaveDBRunner.main(args);
-			DailyWeekBollCountAndSaveDBRunner.main(args);
-			DailyWeekMai1Mai2CountAndSaveDBRunner.main(args);
-			DailyWeekShenXianCountAndSaveDBRunner.main(args);
-			DailyWeekYiMengBSCountAndSaveDBRunner.main(args);
+			new AllDailyIndCountAndSaveDBRunner().runDailyWeekIndForStockIds(allStockIds);
 
 			// analyse
-			DailySelectionRunner.main(args);
+			new DailySelectionRunner().runForStockIds(allStockIds);
+
+			// rename analyse report to estimate report
+			this.renameToEstimateReport();
+
+			// save next date estimate stock to table
+			this.saveEstimateStockToDB();
 
 			// analyse both date
-			checkDailyCheckPointForBothDate();
+			this.checkDailyCheckPointForBothDate();
 		} catch (Exception e) {
 			e.printStackTrace();
 		}
@@ -224,12 +229,8 @@ public class PreEstimateStockPriceRunner implements Runnable {
 			// recount week
 			DailyWeeklyStockPriceCountAndSaveDBRunner.main(args);
 			// recount week ind
-			DailyWeekMacdCountAndSaveDBRunner.main(args);
-			DailyWeekKDJCountAndSaveDBRunner.main(args);
-			DailyWeekBollCountAndSaveDBRunner.main(args);
-			DailyWeekMai1Mai2CountAndSaveDBRunner.main(args);
-			DailyWeekShenXianCountAndSaveDBRunner.main(args);
-			DailyWeekYiMengBSCountAndSaveDBRunner.main(args);
+			new AllDailyIndCountAndSaveDBRunner().runDailyWeekIndForStockIds(allStockIds);
+			System.out.println("PreEstimateStockPriceRunner completed!");
 		}
 	}
 

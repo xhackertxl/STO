@@ -19,6 +19,8 @@ import org.easystogu.db.access.ChuQuanChuXiPriceHelper;
 import org.easystogu.db.access.StockPriceTableHelper;
 import org.easystogu.db.access.StockSuperVOHelper;
 import org.easystogu.db.access.WeekStockSuperVOHelper;
+import org.easystogu.db.access.ZiJinLiu3DayTableHelper;
+import org.easystogu.db.access.ZiJinLiu5DayTableHelper;
 import org.easystogu.db.access.ZiJinLiuTableHelper;
 import org.easystogu.db.table.CheckPointDailySelectionVO;
 import org.easystogu.db.table.StockSuperVO;
@@ -31,28 +33,31 @@ import org.easystogu.report.RangeHistoryReportVO;
 import org.easystogu.report.ReportTemplate;
 import org.easystogu.report.comparator.ZiJinLiuComparator;
 
+//daily select stock that checkpoint is satisfied
 public class DailySelectionRunner implements Runnable {
 	private FileConfigurationService config = FileConfigurationService.getInstance();
+	private CompanyInfoFileHelper stockConfig = CompanyInfoFileHelper.getInstance();
 	private StockPriceTableHelper stockPriceTable = StockPriceTableHelper.getInstance();
 	private StockSuperVOHelper stockOverAllHelper = new StockSuperVOHelper();
 	private WeekStockSuperVOHelper weekStockOverAllHelper = new WeekStockSuperVOHelper();
 	private String latestDate = stockPriceTable.getLatestStockDate();
 	private CheckPointDailySelectionTableHelper checkPointDailySelectionTable = CheckPointDailySelectionTableHelper
 			.getInstance();
+	private RealTimeZiJinLiuFatchDataHelper realTimeZiJinLiuHelper = RealTimeZiJinLiuFatchDataHelper.getInstance();
 	private ZiJinLiuTableHelper ziJinLiuTableHelper = ZiJinLiuTableHelper.getInstance();
-	private RealTimeZiJinLiuFatchDataHelper realTimeZiJinLiuHelper = new RealTimeZiJinLiuFatchDataHelper();
+	private ZiJinLiu3DayTableHelper ziJinLiu3DayTableHelper = ZiJinLiu3DayTableHelper.getInstance();
+	private ZiJinLiu5DayTableHelper ziJinLiu5DayTableHelper = ZiJinLiu5DayTableHelper.getInstance();
 	private HistoryAnalyseReport historyReportHelper = new HistoryAnalyseReport();
 	private CombineAnalyseHelper combineAnalyserHelper = new CombineAnalyseHelper();
-	private double minEarnPercent = config.getDouble("minEarnPercent_Select_CheckPoint");
-	private boolean realTimeGetZiJinLiuAnalyse = config.getBoolean("real_Time_Get_ZiJin_Liu_Analyse", true);
 	private boolean doHistoryAnalyzeInDailySelection = config.getBoolean("do_History_Analyze_In_Daily_Selection", true);
 	private String[] specifySelectCheckPoints = config.getString("specify_Select_CheckPoint", "").split(";");
 	private String[] specifyDependCheckPoints = config.getString("specify_Depend_CheckPoint", "").split(";");
 	private StringBuffer recommandStr = new StringBuffer();
-	private HashMap<String, ZiJinLiuVO> realTimeZiJinLiuMap = new HashMap<String, ZiJinLiuVO>();
 	// StockPriceVO, CheckPoint list
 	private Map<StockSuperVO, List<DailyCombineCheckPoint>> selectedMaps = new HashMap<StockSuperVO, List<DailyCombineCheckPoint>>();
-	protected ChuQuanChuXiPriceHelper chuQuanChuXiPriceHelper = new ChuQuanChuXiPriceHelper();
+	private ChuQuanChuXiPriceHelper chuQuanChuXiPriceHelper = new ChuQuanChuXiPriceHelper();
+	private Map<String, ZiJinLiuVO> realTimeZiJinLiuMap = new HashMap<String, ZiJinLiuVO>();
+	private boolean fetchRealTimeZiJinLiu = false;
 
 	public void doAnalyse(String stockId) {
 		try {
@@ -87,13 +92,13 @@ public class DailySelectionRunner implements Runnable {
 			for (DailyCombineCheckPoint checkPoint : DailyCombineCheckPoint.values()) {
 				if (this.isSelectedCheckPoint(checkPoint)) {
 					if (combineAnalyserHelper.isConditionSatisfy(checkPoint, overDayList, overWeekList)) {
-						superVO.setZiJinLiuVO(this.getZiJinLiuVO(stockId));
+						this.setZiJinLiuVO(superVO);
 						this.saveToCheckPointSelectionDB(superVO, checkPoint);
 						this.addToConditionMapForReportDisplay(superVO, checkPoint);
 					}
 				} else if (this.isDependCheckPoint(checkPoint)) {
 					if (combineAnalyserHelper.isConditionSatisfy(checkPoint, overDayList, overWeekList)) {
-						superVO.setZiJinLiuVO(this.getZiJinLiuVO(stockId));
+						this.setZiJinLiuVO(superVO);
 						// search if other checkpoint already happen in recent
 						// days
 						CheckPointDailySelectionVO latestCheckPointSelection = checkPointDailySelectionTable
@@ -117,33 +122,30 @@ public class DailySelectionRunner implements Runnable {
 		}
 	}
 
-	private ZiJinLiuVO getZiJinLiuVO(String stockId) {
+	private void setZiJinLiuVO(StockSuperVO superVO) {
 
 		// if real time zijinliu is not collect, then find it from total range
 		// zijinliu (59 pages)
-		if (!realTimeGetZiJinLiuAnalyse) {
-			ZiJinLiuVO dbZiJinLiuVO = ziJinLiuTableHelper.getZiJinLiu(stockId, latestDate);
-			if (dbZiJinLiuVO != null)
-				return dbZiJinLiuVO;
-			return new ZiJinLiuVO("");
-		}
-
-		if (!this.realTimeZiJinLiuMap.containsKey(stockId)) {
-			ZiJinLiuVO rtZiJinLiuVO = realTimeZiJinLiuHelper.fetchDataFromWeb(stockId);
-			ZiJinLiuVO dbZiJinLiuVO = ziJinLiuTableHelper.getZiJinLiu(stockId, latestDate);
-			if (rtZiJinLiuVO != null && dbZiJinLiuVO != null) {
-				if (!rtZiJinLiuVO.isValidated()) {
-					// if can not get real time zijinliu, then use history DB
-					rtZiJinLiuVO = dbZiJinLiuVO;
-				} else {
-					// the real time zijinliu do not have rate, so do add it
-					rtZiJinLiuVO.setRate(dbZiJinLiuVO.getRate());
-				}
+		if (this.fetchRealTimeZiJinLiu) {
+			String stockId = superVO.priceVO.stockId;
+			ZiJinLiuVO realTimeVO = null;
+			if (!this.realTimeZiJinLiuMap.containsKey(stockId)) {
+				realTimeVO = realTimeZiJinLiuHelper.fetchDataFromWeb(stockId);
+				this.realTimeZiJinLiuMap.put(stockId, realTimeVO);
+			} else {
+				realTimeVO = this.realTimeZiJinLiuMap.get(stockId);
 			}
-			this.realTimeZiJinLiuMap.put(new String(stockId), rtZiJinLiuVO);
+
+			// put ziJinLiu VO to list
+			superVO.putZiJinLiuVO(ZiJinLiuVO.RealTime, realTimeVO);
 		}
 
-		return this.realTimeZiJinLiuMap.get(stockId);
+		// also get zijinliu from DB if exist
+		superVO.putZiJinLiuVO(ZiJinLiuVO._1Day, ziJinLiuTableHelper.getZiJinLiu(superVO.priceVO.stockId, latestDate));
+		superVO.putZiJinLiuVO(ZiJinLiuVO._3Day,
+				ziJinLiu3DayTableHelper.getZiJinLiu(superVO.priceVO.stockId, latestDate));
+		superVO.putZiJinLiuVO(ZiJinLiuVO._5Day,
+				ziJinLiu5DayTableHelper.getZiJinLiu(superVO.priceVO.stockId, latestDate));
 	}
 
 	private void saveToCheckPointSelectionDB(StockSuperVO superVO, DailyCombineCheckPoint checkPoint) {
@@ -172,7 +174,7 @@ public class DailySelectionRunner implements Runnable {
 					return true;
 				}
 			}
-		} else if (checkPoint.getEarnPercent() >= minEarnPercent) {
+		} else if (checkPoint.isSatisfyMinEarnPercent()) {
 			return true;
 		}
 		return false;
@@ -194,14 +196,13 @@ public class DailySelectionRunner implements Runnable {
 			StockSuperVO superVO = keysIt.next();
 			List<DailyCombineCheckPoint> checkPointList = this.selectedMaps.get(superVO);
 			for (DailyCombineCheckPoint checkPoint : checkPointList) {
-				if (checkPoint.getEarnPercent() >= this.minEarnPercent) {
+				if (checkPoint.isSatisfyMinEarnPercent()) {
 					recommandStr.append(superVO.priceVO.stockId + " select :" + checkPointList.toString() + " "
-							+ superVO.getZiJinLiuVO().toNetPerString() + "\n");
+							+ superVO.genZiJinLiuInfo() + "\n");
 				}
 			}
 		}
 
-		System.out.println("\nRecommand to select below checkPoint that earnPercent >=" + minEarnPercent);
 		System.out.println(recommandStr.toString());
 	}
 
@@ -214,7 +215,7 @@ public class DailySelectionRunner implements Runnable {
 			List<DailyCombineCheckPoint> checkPointList = this.selectedMaps.get(superVO);
 
 			for (DailyCombineCheckPoint checkPoint : checkPointList) {
-				if (checkPoint.getEarnPercent() >= this.minEarnPercent) {
+				if (checkPoint.isSatisfyMinEarnPercent()) {
 					List<HistoryReportDetailsVO> hisReport = new ArrayList<HistoryReportDetailsVO>();
 					if (doHistoryAnalyzeInDailySelection) {
 						hisReport = historyReportHelper.doAnalyseReport(superVO.priceVO.stockId, checkPoint);
@@ -233,10 +234,10 @@ public class DailySelectionRunner implements Runnable {
 	public void reportToConsole(List<RangeHistoryReportVO> rangeList) {
 		System.out.println("\nHistory range report: ");
 		for (RangeHistoryReportVO rangeVO : rangeList) {
-			if (rangeVO.currentSuperVO.ziJinLiuVO.majorNetPer >= 0) {
+			if (rangeVO.currentSuperVO.isAllMajorNetPerIn()) {
 				System.out.println(rangeVO.toSimpleString() + " WeekLen(" + rangeVO.currentSuperVO.hengPanWeekLen
 						+ ") KDJ(" + (int) rangeVO.currentSuperVO.kdjVO.k + ") "
-						+ rangeVO.currentSuperVO.ziJinLiuVO.toNetPerString());
+						+ rangeVO.currentSuperVO.genZiJinLiuInfo());
 			}
 		}
 	}
@@ -256,11 +257,11 @@ public class DailySelectionRunner implements Runnable {
 
 			for (RangeHistoryReportVO rangeVO : rangeList) {
 
-				if (rangeVO.checkPoint.getEarnPercent() < this.minEarnPercent) {
+				if (!rangeVO.checkPoint.isSatisfyMinEarnPercent()) {
 					continue;
 				}
 
-				if (rangeVO.currentSuperVO.ziJinLiuVO.majorNetPer < 0) {
+				if (!rangeVO.currentSuperVO.isAllMajorNetPerIn()) {
 					continue;
 				}
 
@@ -272,8 +273,8 @@ public class DailySelectionRunner implements Runnable {
 
 				fout.write(ReportTemplate.tableTdStart);
 				fout.write(rangeVO.toSimpleString() + "&nbsp; WeekLen(" + rangeVO.currentSuperVO.hengPanWeekLen
-						+ ") &nbsp; KDJ(" + (int) rangeVO.currentSuperVO.kdjVO.k + ") &nbsp;"
-						+ rangeVO.currentSuperVO.ziJinLiuVO.toNetPerString());
+						+ ") &nbsp; KDJ(" + (int) rangeVO.currentSuperVO.kdjVO.k + ") <br> "
+						+ rangeVO.currentSuperVO.genZiJinLiuInfo());
 				fout.write(ReportTemplate.tableTdEnd);
 				fout.newLine();
 
@@ -310,14 +311,15 @@ public class DailySelectionRunner implements Runnable {
 		Collections.sort(rangeList, new ZiJinLiuComparator());
 	}
 
-	public void run() {
-		// CheckPointDailySelectionTableHelper eventTable =
-		// CheckPointDailySelectionTableHelper.getInstance();
-		// System.out.println("Delete latest's Select Event");
-		// eventTable.deleteByDate(runner.latestDate);
+	public boolean isFetchRealTimeZiJinLiu() {
+		return fetchRealTimeZiJinLiu;
+	}
 
-		CompanyInfoFileHelper stockConfig = CompanyInfoFileHelper.getInstance();
-		List<String> stockIds = stockConfig.getAllStockId();
+	public void setFetchRealTimeZiJinLiu(boolean fetchRealTimeZiJinLiu) {
+		this.fetchRealTimeZiJinLiu = fetchRealTimeZiJinLiu;
+	}
+
+	public void runForStockIds(List<String> stockIds) {
 		int index = 0;
 		for (String stockId : stockIds) {
 			// if (!stockId.equals("600680"))
@@ -330,6 +332,11 @@ public class DailySelectionRunner implements Runnable {
 
 		reportSelectedStockIds();
 		reportSelectedHistoryReport();
+	}
+
+	public void run() {
+		List<String> stockIds = stockConfig.getAllStockId();
+		this.runForStockIds(stockIds);
 	}
 
 	public static void main(String[] args) {

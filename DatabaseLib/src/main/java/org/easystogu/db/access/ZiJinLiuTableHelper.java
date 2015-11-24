@@ -26,10 +26,11 @@ public class ZiJinLiuTableHelper {
 	private static Logger logger = LogHelper.getLogger(ZiJinLiuTableHelper.class);
 	private static ZiJinLiuTableHelper instance = null;
 	protected DataSource dataSource = PostgreSqlDataSourceFactory.createDataSource();
+	// please modify this SQL in all subClass
 	protected String tableName = "ZIJINLIU";
 	protected String INSERT_SQL = "INSERT INTO "
 			+ tableName
-			+ " (stockId, date, rate, majorNetIn, majorNetPer, biggestNetIn, biggestNetPer, bigNetIn, bigNetPer, midNetIn, midNetPer, smallNetIn, smallNetPer) VALUES (:stockId, :date, :rate, :majorNetIn, :majorNetPer, :biggestNetIn, :biggestNetPer, :bigNetIn, :bigNetPer, :midNetIn, :midNetPer, :smallNetIn, :smallNetPer)";
+			+ " (stockId, date, rate, incPer, majorNetIn, majorNetPer, biggestNetIn, biggestNetPer, bigNetIn, bigNetPer, midNetIn, midNetPer, smallNetIn, smallNetPer) VALUES (:stockId, :date, :rate, :incPer, :majorNetIn, :majorNetPer, :biggestNetIn, :biggestNetPer, :bigNetIn, :bigNetPer, :midNetIn, :midNetPer, :smallNetIn, :smallNetPer)";
 	protected String QUERY_BY_ID_AND_DATE_SQL = "SELECT * FROM " + tableName
 			+ " WHERE stockId = :stockId AND date = :date";
 	protected String QUERY_ALL_BY_ID_SQL = "SELECT * FROM " + tableName + " WHERE stockId = :stockId ORDER BY date";
@@ -60,6 +61,7 @@ public class ZiJinLiuTableHelper {
 			vo.setStockId(rs.getString("stockId"));
 			vo.setDate(rs.getString("date"));
 			vo.setRate(rs.getInt("rate"));
+			vo.setIncPer(rs.getString("incPer"));
 			vo.setMajorNetIn(rs.getDouble("majornetin"));
 			vo.setMajorNetPer(rs.getDouble("majornetper"));
 			vo.setBiggestNetIn(rs.getDouble("biggestnetin"));
@@ -88,6 +90,7 @@ public class ZiJinLiuTableHelper {
 			namedParameters.addValue("stockId", vo.getStockId());
 			namedParameters.addValue("date", vo.getDate());
 			namedParameters.addValue("rate", vo.getRate());
+			namedParameters.addValue("incPer", vo.getIncPer());
 			namedParameters.addValue("majorNetIn", vo.getMajorNetIn());
 			namedParameters.addValue("majorNetPer", vo.getMajorNetPer());
 			namedParameters.addValue("biggestNetIn", vo.getBiggestNetIn());
